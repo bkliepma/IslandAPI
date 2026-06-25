@@ -279,8 +279,8 @@ function get-IslandSettings {
 
 #updated: token handling, passed values
 #name and destination URLS required
-#Test as written because a lot of the setup got tweaked
 #Clean up synopsis
+#Are all the parameters being used, or are you still using Kris's barebones setup?
 function New-IslandWebApp {
     <#
     .SYNOPSIS
@@ -291,7 +291,7 @@ function New-IslandWebApp {
         sends a POST request to create a new WebApp application, and logs the process.
 
     .PARAMETER
-        $Tenant (mandatory, default: sandbox)(Again, why mandatory AND defaulted?)
+        $Tenant (mandatory)
         $AppName (mandatory)
         $AppDescription (validated)
         $AppType (default: custom)
@@ -313,21 +313,22 @@ function New-IslandWebApp {
     param(
         [Parameter(Mandatory = $true)]
         [ValidateSet("Prod", "Sandbox")]
-        [string]$Tenant = "Sandbox",
+        $Tenant,
         #App logo is being skipped for the time being until someone works out the logic to require AppData and AppString if AppLogo without false positives
         [Parameter(Mandatory = $true)]$AppName,
         $AppDescription,
         [ValidateSet("WebApp", "SshApp", "RdpApp", "SmbApp", "DesktopApp", "AiApp")]
         $AppType,
-        [Parameter(Mandatory = $true)]$AppCategory = 'Custom',
+        $AppCategory = 'Custom',
         $AppLogoSVG,
         $AppfromBuiltInAppId,
         [Parameter(Mandatory = $true)]$AppDestinationUrls,
         [ValidateSet($true, $false)]
-        [Parameter(Mandatory = $true)]$AppOverwriteDestinationURLs = $false,
+        $AppOverwriteDestinationURLs = $false,
         $ApploginUrls
     )
-
+#TEST
+# ADD ERROR CHECKING - bad request if the app exists
     Write-Log -Message "Starting New-IslandWebApp function." -Component "New-IslandWebApp" -LogName "IslandAPI-NewWebApp"
 
     $Settings = get-IslandSettings ($Tenant)
@@ -336,7 +337,7 @@ function New-IslandWebApp {
 
     $islandAPIheaders  = @{
         'accept'       = 'application/json'
-        'api-key'      = $islandAPIKey
+        'api-key'      = $Settings.APIToken
         'content-type' = 'application/json'
     }
 
@@ -352,6 +353,7 @@ function New-IslandWebApp {
     } | ConvertTo-Json -Depth 3
 
     Write-Log -Message "Request body prepared." -Component "New-IslandWebApp" -LogName "IslandAPI-NewWebApp"
+    Write-Log -Message $islandAPIbody -Component "New-IslandWebApp" -LogName "IslandAPI-NewWebApp"
 
     try {
         Write-Log -Message "Sending POST request to $islandAPIUri." -Component "New-IslandWebApp" -LogName "IslandAPI-NewWebApp"
@@ -362,12 +364,116 @@ function New-IslandWebApp {
     catch {
         Write-Log -Message "POST request failed: $($_.Exception.Message)" -Component "New-IslandWebApp" -Type "Error" -LogName "IslandAPI-NewWebApp"
         $_.Exception.Message
+        If ($testresult.message -like "*(400) Bad Request*")
+        {
+            Write-Log -Message "Trying Get-IslandApps to find existing app" -Component "New-IslandWebApp" -Type "Error" -LogName "IslandAPI-NewWebApp"
+            Try 
+            {
+                $apps = Get-IslandApps -Tenant $Tenant -Type WebApp
+                foreach($app in $apps)
+                {
+                    If($app.name -like $AppName)
+                    {
+                        $updateapp = Read-host "Web app " $AppName " already exists on " $Tenant ". Update? (y/n)"
+                        If (($updateapp -eq 'y') -or ($updateapp -eq 'yes'))
+                        {
+                            Write-Host "Trying Update-IslandWebApp instead."
+                            Update-IslandWebApp -Tenant $Tenant -AppID $app.id -AppName $AppName -AppDestinationUrls $AppDestinationUrls -AppOverwriteDestinationURLs $false
+                        }
+                        Else{Write-host "Not updating existing app per response"}
+                    }
+                }
+            }
+            Catch
+            {
+                Write-Log -Message "No existing app found." -Component "New-IslandWebApp" -Type "Error" -LogName "IslandAPI-NewWebApp"
+                Write-host "Failed to create new app."
+            }
+        }
     }
 
-    $islandAPIKey = $null
-    Write-Log -Message "API Key cleared from memory." -Component "New-IslandWebApp" -LogName "IslandAPI-NewWebApp"
     Write-Log -Message "New-IslandWebApp function completed." -Component "New-IslandWebApp" -LogName "IslandAPI-NewWebApp"
 }
+
+#update synopsis
+function Test-IslandWebApp{
+    <#
+    .SYNOPSIS
+        
+
+    .DESCRIPTION
+        
+
+    .PARAMETER
+        $Tenant (mandatory)
+        $AppName (mandatory)
+        $AppDescription (validated)
+        $AppType (default: custom)
+        $AppLogoSVG
+        $AppfromBuiltInAppId
+        $AppDestinationUrls (mandatory)
+        $AppOverwriteDestinationURLs (Why is this both mandatory and default false? Why does it exist at all? this is for new apps.)
+        $ApploginUrls
+
+    .EXAMPLE
+        New-IslandWebApp
+
+    .NOTES
+        Requires: Write-Log function to be defined in the session.
+        
+    .LINK
+        https://documentation.island.io/apidocs/introduction-to-the-api-explorer
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("Prod", "Sandbox")]
+        $Tenant,
+        #App logo is being skipped for the time being until someone works out the logic to require AppData and AppString if AppLogo without false positives
+        [Parameter(Mandatory = $true)]$AppName,
+        $AppDescription,
+        [ValidateSet("WebApp", "SshApp", "RdpApp", "SmbApp", "DesktopApp", "AiApp")]
+        $AppType,
+        $AppCategory = 'Custom',
+        $AppLogoSVG,
+        $AppfromBuiltInAppId,
+        [Parameter(Mandatory = $true)]$AppDestinationUrls,
+        [ValidateSet($true, $false)]
+        $AppOverwriteDestinationURLs = $false,
+        $ApploginUrls
+    )
+    Write-Log -Message "Trying Get-IslandApps to find existing app" -Component "New-IslandWebApp" -Type "Error" `
+        -LogName "IslandAPI-NewWebApp"
+    $apps = Get-IslandApps -Tenant $Tenant -Type WebApp
+    $found = $false
+    foreach($app in $apps)
+    { 
+        Write-Host $app.name
+        If($app.name -like $AppName)
+        {
+            $found = $true
+            try 
+            {
+                $updateapp = Read-host "Web app " $AppName " already exists on " $Tenant ". Update? (y/n)"
+                If (($updateapp -eq 'y') -or ($updateapp -eq 'yes'))
+                {
+                    Write-Host "Trying Modify-IslandWebApp instead."
+                    Modify-IslandWebApp -Tenant $Tenant -AppID $app.id -AppName $AppName -AppDestinationUrls $AppDestinationUrls `
+                        -AppOverwriteDestinationURLs $false
+                    Write-host "Back after Modify-IslandWebApp"
+                }
+                Else {Write-host "Not updating existing app per response"}
+            }
+            catch 
+            {
+                Write-host "Failed to create new app."
+                Write-Log -Message "POST request failed: $($_.Exception.Message)" -Component "New-IslandWebApp" -Type "Error" -LogName "IslandAPI-NewWebApp"   
+            }
+        }
+    }
+    If ($found -eq $false)
+    {Write-Log -Message "No existing app found." -Component "New-IslandWebApp" -Type "Error" -LogName "IslandAPI-NewWebApp"}
+}
+
 
 function Get-IslandAppByID {
 <#
@@ -385,11 +491,8 @@ function Get-IslandAppByID {
 
     [CmdletBinding()]
     Param(
-        [Parameter(Mandatory = $true)]
-        [ValidateSet("Prod", "Sandbox")]
-        $Tenant = "Sandbox",
-        [Parameter(Mandatory = $true)]
-        $AppID
+        [Parameter(Mandatory = $true)][ValidateSet("Prod", "Sandbox")]$Tenant,
+        [Parameter(Mandatory = $true)]$AppID
         )
         
     #APItoken
@@ -410,7 +513,7 @@ function Get-IslandAppByID {
         Write-Log -Message "Sending POST request to $islandAPIUri."  -Component "Get-IslandAppByID" -LogName "IslandAPI-Get-IslandAppByID"
         $islandAPIResponse = Invoke-RestMethod -Method Get -Uri $islandAPIUri -Headers $settings.APIHeaders -Body $islandAPIbody
         Write-Log -Message "Get request successful." -Component "Get-IslandAppByID" -LogName "IslandAPI-Get-IslandAppByID"
-        $islandAPIResponse
+        #$islandAPIResponse
     }
     catch {
         Write-Log -Message "GET request failed: $($_.Exception.Message)" -Component "Get-IslandAppByID" -LogName "IslandAPI-Get-IslandAppByID"
@@ -422,7 +525,8 @@ function Get-IslandAppByID {
     Write-Log -Message "Modify-IslandWebApp function completed." -Component "Get-IslandAppByID" -LogName "IslandAPI-Get-IslandAppByID"
 }
 
-Function Modify-IslandWebApp {
+#TODO: make message body modular based on if elements are defined
+Function Update-IslandWebApp {
 <#
 .Synopsis
     Updates/modifies an existing web app
@@ -430,7 +534,7 @@ Function Modify-IslandWebApp {
     Properly speaking, this overwrites an existing app by name; nothing but the name and ID are retained by default when calling this method.
     App logo is getting skipped until someone works out the logic and parameter set for it 
 .Parameter
-    Tenant: accepts "Prod" or "Sandbox;" default is Sandbox
+    Tenant (mandatory, validated)
     AppID (mandatory)
     AppName (mandatory)
     AppDescription 
@@ -441,36 +545,36 @@ Function Modify-IslandWebApp {
     AppOverwriteDestinationURLs (mandatory, validated, default false)
     ApploginUrls
 .EXAMPLE
-    Modify-IslandWebApp -Tenant Sandbox -AppID <ID> -AppName Name -AppDestinationUrls "urls, separated by commas" -AppOverwriteDestinationURLs $false
+    Update-IslandWebApp -Tenant Sandbox -AppID <ID> -AppName Name -AppDestinationUrls "urls, separated by commas" -AppOverwriteDestinationURLs $false
 #>
     param(
-        [Parameter(Mandatory = $true)]
-        [ValidateSet("Prod", "Sandbox")]
-        [string]$Tenant = "Sandbox",
+        [Parameter(Mandatory = $true)][ValidateSet("Prod", "Sandbox")] $Tenant,
         [Parameter(Mandatory = $true)]$AppID,
-        #App logo is being skipped for the time being until someone works out the logic to require AppData and AppString if AppLogo without false positives
         [Parameter(Mandatory = $true)]$AppName,
         $AppDescription,
-        [ValidateSet("WebApp", "SshApp", "RdpApp", "SmbApp", "DesktopApp", "AiApp")]
-        $AppType,
-        [Parameter(Mandatory = $true)]$AppCategory = 'Custom',
+        [ValidateSet("WebApp", "SshApp", "RdpApp", "SmbApp", "DesktopApp", "AiApp")] $AppType,
+        $AppCategory = 'Custom',
         $AppLogoSVG,
         $AppfromBuiltInAppId,
-        [Parameter(Mandatory = $true)]$AppDestinationUrls,
-        [ValidateSet($true, $false)]
-        [Parameter(Mandatory = $true)]$AppOverwriteDestinationURLs = $false,
+        [Parameter(Mandatory = $true)] $AppDestinationUrls,
+        [ValidateSet($true, $false)] $AppOverwriteDestinationURLs = $false,
         $ApploginUrls
-    )
+        #App logo is being skipped until someone works out the logic to require AppData and `
+            #AppString if AppLogo without false positives
+        )
     
     #APItoken
-    Write-Log -Message "Starting Modify-IslandWebApp." -Component "Modify-IslandWebApp" -LogName "IslandAPI-ModifyIslandWebApp"
-    $islandAPIKey = get-IslandAPItoken ($Tenant)
-    Write-Log -Message "API Key retrieved." -Component "Modify-IslandWebApp" -LogName "IslandAPI-ModifyIslandWebApp"
+    Write-Log -Message "Starting Update-IslandWebApp." -Component "Update-IslandWebApp" -LogName "IslandAPI-UpdateIslandWebApp"
 
     #Get existing destinationURLs so they aren't overwritten
     If(-not $AppOverwriteDestinationURLs){
-        $originalURLs = Get-IslandAppByID -Tenant $Tenant -AppID $AppID
-        $AppDestinationUrls = $originalURLs + $AppDestinationUrls
+        try {
+            $originalURLs = Get-IslandAppByID -Tenant $Tenant -AppID $AppID
+            $AppDestinationUrls = $originalURLs.destinationUrls + $AppDestinationUrls
+        }
+        catch {
+            Write-host $_.Exception.Message ############todo: logging?
+        }
     }
 
     #settings and headers
@@ -481,34 +585,32 @@ Function Modify-IslandWebApp {
     $loginUrls = $ApploginUrls -split ',' | ForEach-Object { $_.Trim() }
 
     #message body
-    Write-Log -Message "Destination URLs parsed: $($destinationUrls -join ', ')" -Component "Modify-IslandWebApp" -LogName "IslandAPI-ModifyIslandWebApp"
-    Write-Log -Message "Login URLs parsed: $($loginUrls -join ', ')" -Component "Modify-IslandWebApp" -LogName "IslandAPI-ModifyIslandWebApp"
+    Write-Log -Message "Destination URLs parsed: $($destinationUrls -join ', ')" -Component "Update-IslandWebApp" -LogName "IslandAPI-UpdateIslandWebApp"
+    Write-Log -Message "Login URLs parsed: $($loginUrls -join ', ')" -Component "Update-IslandWebApp" -LogName "IslandAPI-UpdateIslandWebApp"
         
     $islandAPIbody = @{
-        name= $appName
-        description = $AppDescription
-        type = $AppType
-        category = $AppCategory
-        logoSvg = $AppLogoSVG
+        name            = $appName
+        #description     = $AppDescription
+        #type            = $AppType
+        category        = $AppCategory
+        #logoSvg         = $AppLogoSVG
         destinationUrls = $destinationUrls
-        loginUrls = $loginUrls
+        #loginUrls       = $loginUrls
     } | ConvertTo-Json -Depth 3
-    Write-Log -Message "Request body prepared." -Component "Modify-IslandWebApp" -LogName "IslandAPI-ModifyIslandWebApp"
-    
-    #POST
+    Write-Log -Message "Request body prepared." -Component "Update-IslandWebApp" -LogName "IslandAPI-UpdateIslandWebApp"
+    Write-Log -Message $islandAPIbody -Component "Update-IslandWebApp" -LogName "IslandAPI-UpdateIslandWebApp"
+
+    #PATCH
     try {
-        Write-Log -Message "Sending PATCH request to $islandAPIUri." -Component "Modify-IslandWebApp" -LogName "IslandAPI-ModifyIslandWebApp"
-        $islandAPIResponse = Invoke-RestMethod -Method Patch -Uri $islandAPIUri -Headers $islandAPIheaders -Body $islandAPIbody
-        Write-Log -Message "PATCH request successful." -Component "Modify-IslandWebApp" -LogName "IslandAPI-ModifyIslandWebApp"
-        $islandAPIResponse
+        Write-Log -Message "Sending PATCH request to $islandAPIUri." -Component "Update-IslandWebApp" -LogName "IslandAPI-UpdateIslandWebApp"
+        $islandAPIResponse = Invoke-RestMethod -Method Patch -Uri $islandAPIUri -Headers $settings.APIHeaders -Body $islandAPIbody
+        Write-Log -Message "PATCH request successful." -Component "Update-IslandWebApp" -LogName "IslandAPI-UpdateIslandWebApp"
+        Write-Log -Message $islandAPIResponse -Component "Update-IslandWebApp" -LogName "IslandAPI-UpdateIslandWebApp"
     }
     catch {
-        Write-Log -Message "POST request failed: $($_.Exception.Message)" -Component "Modify-IslandWebApp" -LogName "IslandAPI-ModifyIslandWebApp"
-        $_.Exception.Message
+        Write-Log -Message "POST request failed: $($_.Exception.Message)" -Component "Update-IslandWebApp" -LogName "IslandAPI-UpdateIslandWebApp"
     }
-    $islandAPIKey = $null
-    Write-Log -Message "API Key cleared from memory." -Component "Modify-IslandWebApp" -LogName "IslandAPI-ModifyIslandWebApp"
-    Write-Log -Message "Modify-IslandWebApp function completed." -Component "Modify-IslandWebApp" -LogName "IslandAPI-ModifyIslandWebApp"
+    Write-Log -Message "Update-IslandWebApp function completed." -Component "Update-IslandWebApp" -LogName "IslandAPI-UpdateIslandWebApp"
 
 }
 
@@ -767,8 +869,8 @@ function save-IslandAPItoken {
     Sandbox is saved as SecureKeySB.txt
 
 .PARAMETER Type
-    Tenant (mandatory, validated)
-    API (mandatory, validated)
+    Tenant (validated)
+    API (mandatory)
     $Update (validated)
 
 .EXAMPLE
@@ -779,39 +881,40 @@ function save-IslandAPItoken {
 #>
 
     param(
-        [Parameter(Mandatory = $true)]
         [ValidateSet("Prod", "Sandbox")]
         $Tenant = "Sandbox",
         [Parameter(Mandatory = $true)]
         $API,
         [ValidateSet($true,$false)]
-        $Update
+        $Update = $false
     )
 
-    $users = Convert-QueryToObjects | ? {$_.SessionState -eq 'Active'}
+    $users = Convert-QueryToObjects | Where-Object {$_.SessionState -eq 'Active'}
     $IslandPath = 'C:\Users\' + $users.Username + '\documents\WindowsPowerShell\Island'
 
     #create  Island folder if it doesn't exist
     If (!(Test-Path $IslandPath)){New-Item -ItemType Directory -Path $IslandPath}
-    switch ($Tenant){
-        Prod:{$Keypath = 'C:\Users\' + $users.Username + '\documents\WindowsPowerShell\Island\SecureKeyProd.txt'}
-        Sandbox:{$Keypath = 'C:\Users\' + $users.Username + '\documents\WindowsPowerShell\Island\SecureKeySB.txt'}
+    
+    switch ($Tenant){###############
+        'Prod'{$Keypath = $IslandPath + '\SecureKeyProd.txt'}
+        'Sandbox'{$Keypath =  $IslandPath + '\SecureKeySB.txt'}
     }
-        #if the keyfile already exists, ask if it needs updating. If it doesn't exist, create file, save API
-    If((Test-Path $Keypath) -and (($Update -eq $false)-or ($Update -eq $null))){
+    #if the keyfile already exists, ask if it needs updating. If it doesn't exist, create file, save API
+    If((Test-Path $Keypath) -and (($Update -eq $false))){
         $UpdateKey = Read-Host $Tenant " key is already saved. Do you want to update it? (Y/N) "
         If(($UpdateKey -eq 'yes') -or ($UpdateKey -eq 'y') ){
             #Store Api credentials
-            $apiKey = Read-Host "Enter your Island API key for " $tenant
-            $password = ConvertTo-SecureString $apiKey -AsPlainText -Force
+            Write-host $Keypath
+            #$apiKey = Read-Host "Enter your Island API key for " $tenant
+            $password = ConvertTo-SecureString $api -AsPlainText -Force
             $password | ConvertFrom-SecureString | Out-File $Keypath
         }
         Else{Write-Host "Skipping" $Tenant "key ..."}
     }
-    Else{            
+    Else{  #####################ignores update          
         #Store Api credentials
-        $apiKey = Read-Host "Enter your Island API key for " $Tenant
-        $password = ConvertTo-SecureString $apiKey -AsPlainText -Force
+        #$apiKey = Read-Host "Enter your Island API key for " $Tenant
+        $password = ConvertTo-SecureString $api -AsPlainText -Force
         $password | ConvertFrom-SecureString | Out-File $Keypath
     }
 }
@@ -894,14 +997,47 @@ save/set preferences (Save/use API key, sb/prod default, ???)
 #TODO parameter set to migrate by name or ID
 #TODO Did you use AppOverwriteDestinationURLs?
 #Did you check if source and destination are different?
-function Migrate-IslandWebAppByID{
+function Migrate-IslandWebAppByID{ #This is for copying from SB to prod; fix
+<#
+    .SYNOPSIS
+        Copies an app from Sandbox to Prod
+
+    .DESCRIPTION
+        Intended for promotion to Prod
+
+    .PARAMETER Type
+        $Source (Mandatory)
+        $Destination (Mandatory)
+        $AppID (Mandatory)
+        $AppName,
+        $AppDescription,
+        $AppType [Validated("WebApp", "SshApp", "RdpApp", "SmbApp", "DesktopApp", "AiApp")]
+        $AppCategory = 'Custom',
+        $AppLogoSVG,
+        $AppfromBuiltInAppId,
+        $AppDestinationUrls,
+        $ApploginUrls [Validated($true, $false)][Parameter(Mandatory = $true)]
+        $AppOverwriteDestinationURLs = $false,
+        $VerifyAppByName [Validated($true, $false)]
+        $OverwriteExistingApp [Validated($true, $false)] = $false
+
+    .EXAMPLE
+
+    .EXAMPLE
+
+    .NOTES
+        Requires: Write-Log function to be defined in the session.
+
+    .LINK
+        https://documentation.island.io/apidocs/introduction-to-the-api-explorer
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [ValidateSet("Prod", "Sandbox")]
-        [string]$Source = "Sandbox",
+        [string]$Source,
         [Parameter(Mandatory = $true)]
         [ValidateSet("Prod", "Sandbox")]
-        [string]$Destination = "Prod",
+        [string]$Destination,
         [Parameter(Mandatory = $true)]$AppID,
         $AppName,
         $AppDescription,
@@ -934,7 +1070,7 @@ function Migrate-IslandWebAppByID{
 
     #if we are overwriting the existing app and it exists, update/overwrite 
     elseif (($OverwriteExistingApp -eq 'yes') -or ($OverwriteExistingApp -eq 'y')){
-        Modify-IslandWebApp -Tenant $destination -name $SourceWebApp.name -description $SourceWebApp.description -type $SourceWebApp.type `
+        Update-IslandWebApp -Tenant $destination -name $SourceWebApp.name -description $SourceWebApp.description -type $SourceWebApp.type `
             -category $SourceWebApp.category -logoSvg $SourceWebApp.logosvg -fromBuiltInAppId $SourceWebApp.BuiltInApp `
             -destinationUrls $SourceWebApp.destinationUrls -loginUrls $SourceWebApp.loginUrls 
         }
@@ -943,8 +1079,10 @@ function Migrate-IslandWebAppByID{
     elseif (($OverwriteExistingApp -ne 'yes') -and ($OverwriteExistingApp -ne 'y')){
         Write-Host $DestinationWebApp.name " already exists in " $Destination " and the `
             OverwriteExistingApp parameter was not Yes. Destination URLs will be merged. Other settings will be updated."
-        foreach($url in $DestinationWebApp.destinationUrls){if ($DestinationWebApp.destinationUrls -notcontains $url){$SourceWebApp.destinationUrls.Add($url)}}
-        Modify-IslandWebApp -Tenant $destination -name $SourceWebApp.name -description $SourceWebApp.description -type $SourceWebApp.type `
+        foreach($url in $DestinationWebApp.destinationUrls)
+            {if ($DestinationWebApp.destinationUrls -notcontains $url)
+                {$SourceWebApp.destinationUrls.Add($url)}}
+        Update-IslandWebApp -Tenant $destination -name $SourceWebApp.name -description $SourceWebApp.description -type $SourceWebApp.type `
             -category $SourceWebApp.category -logoSvg $SourceWebApp.logosvg -fromBuiltInAppId $SourceWebApp.BuiltInApp `
             -destinationUrls $SourceWebApp.destinationUrls -loginUrls $SourceWebApp.loginUrls 
     }
