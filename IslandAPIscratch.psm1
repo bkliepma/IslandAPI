@@ -144,7 +144,7 @@ function Convert-QueryToObjects{
             Write-Error "There was an error running query against $Name : $Users"
             Write-Verbose "There was an error running query against $Name."
         }
-        elseif ($Users -eq $null -and $ErrorActionPreference -eq 'SilentlyContinue')
+        elseif ($null -eq $Users -and $ErrorActionPreference -eq 'SilentlyContinue')
         {
             # Handle null output called by -ErrorAction.
             Write-Verbose "Error action has supressed output from query.exe. Results were null."
@@ -212,7 +212,7 @@ function get-IslandAPItoken {
     #this can be simplified so only the keypath is switched
     switch ($Tenant){
         'Sandbox' {
-            $users = Convert-QueryToObjects | ? {$_.SessionState -eq 'Active'}
+            $users = Convert-QueryToObjects | Where-Object {$_.SessionState -eq 'Active'}
             $KeypathSB = 'C:\Users\' + $users.Username + '\documents\WindowsPowerShell\Island\SecureKeySB.txt'
             If (Test-Path -Path $KeypathSB){
                 #Retrieve Api credentials
@@ -227,7 +227,7 @@ function get-IslandAPItoken {
                 }
         }
         'Prod' {
-            $users = Convert-QueryToObjects | ? {$_.SessionState -eq 'Active'}
+            $users = Convert-QueryToObjects | Where-Object {$_.SessionState -eq 'Active'}
             $KeypathProd = 'C:\Users\' + $users.Username + '\documents\WindowsPowerShell\Island\SecureKeyProd.txt'
             If (Test-Path -Path $KeypathProd){
                 #Retrieve Api credentials
@@ -244,6 +244,7 @@ function get-IslandAPItoken {
     }
 }
 
+#TODO: switch so that returned settings match what are needed for the call type
 function get-IslandSettings {
 <#
 .Synopsis
@@ -279,8 +280,10 @@ function get-IslandSettings {
 
 #updated: token handling, passed values
 #name and destination URLS required
+#Test as written because a lot of the setup got tweaked
 #Clean up synopsis
-#Are all the parameters being used, or are you still using Kris's barebones setup?
+#TODO: modularize message body depending on defines parameters
+#Currently, only required parameters are sent
 function New-IslandWebApp {
     <#
     .SYNOPSIS
@@ -327,28 +330,20 @@ function New-IslandWebApp {
         $AppOverwriteDestinationURLs = $false,
         $ApploginUrls
     )
-#TEST
-# ADD ERROR CHECKING - bad request if the app exists
+
     Write-Log -Message "Starting New-IslandWebApp function." -Component "New-IslandWebApp" -LogName "IslandAPI-NewWebApp"
 
     $Settings = get-IslandSettings ($Tenant)
     $islandAPILocation = '/api/external/v1/applications'
     $islandAPIUri      = $settings.APIHost + $islandAPILocation
-
-    $islandAPIheaders  = @{
-        'accept'       = 'application/json'
-        'api-key'      = $Settings.APIToken
-        'content-type' = 'application/json'
-    }
-
     $destinationUrls = $AppDestinationUrls -split ',' | ForEach-Object { $_.Trim() }
     Write-Log -Message "Destination URLs parsed: $($destinationUrls -join ', ')" -Component "New-IslandWebApp" -LogName "IslandAPI-NewWebApp"
 
     $islandAPIbody = @{
-        name            = $appName
-        type            = "WebApp"
-        category        = "Custom"
-        base64Logo      = $null
+        name = $appName
+        type = "WebApp"
+        category = "Custom"
+        #base64Logo = $null
         destinationUrls = $destinationUrls
     } | ConvertTo-Json -Depth 3
 
@@ -357,52 +352,28 @@ function New-IslandWebApp {
 
     try {
         Write-Log -Message "Sending POST request to $islandAPIUri." -Component "New-IslandWebApp" -LogName "IslandAPI-NewWebApp"
-        $islandAPIResponse = Invoke-RestMethod -Method Post -Uri $islandAPIUri -Headers $islandAPIheaders -Body $islandAPIbody
+        $islandAPIResponse = Invoke-RestMethod -Method Post -Uri $islandAPIUri -Headers $settings.APIHeaders -Body $islandAPIbody
         Write-Log -Message "POST request successful." -Component "New-IslandWebApp" -LogName "IslandAPI-NewWebApp"
-        $islandAPIResponse
+        Write-Log -Message $islandAPIResponse -Component "New-IslandWebApp" -LogName "IslandAPI-NewWebApp"
     }
     catch {
         Write-Log -Message "POST request failed: $($_.Exception.Message)" -Component "New-IslandWebApp" -Type "Error" -LogName "IslandAPI-NewWebApp"
-        $_.Exception.Message
-        If ($testresult.message -like "*(400) Bad Request*")
+        If ($_.Exception.Message -like "*(400) Bad Request*")
         {
-            Write-Log -Message "Trying Get-IslandApps to find existing app" -Component "New-IslandWebApp" -Type "Error" -LogName "IslandAPI-NewWebApp"
-            Try 
-            {
-                $apps = Get-IslandApps -Tenant $Tenant -Type WebApp
-                foreach($app in $apps)
-                {
-                    If($app.name -like $AppName)
-                    {
-                        $updateapp = Read-host "Web app " $AppName " already exists on " $Tenant ". Update? (y/n)"
-                        If (($updateapp -eq 'y') -or ($updateapp -eq 'yes'))
-                        {
-                            Write-Host "Trying Update-IslandWebApp instead."
-                            Update-IslandWebApp -Tenant $Tenant -AppID $app.id -AppName $AppName -AppDestinationUrls $AppDestinationUrls -AppOverwriteDestinationURLs $false
-                        }
-                        Else{Write-host "Not updating existing app per response"}
-                    }
-                }
-            }
-            Catch
-            {
-                Write-Log -Message "No existing app found." -Component "New-IslandWebApp" -Type "Error" -LogName "IslandAPI-NewWebApp"
-                Write-host "Failed to create new app."
-            }
+            Test-IslandWebApp -Tenant $Tenant -AppName $AppName -AppDestinationUrls $AppDestinationUrls -AppOverwriteDestinationURLs $false
         }
     }
-
-    Write-Log -Message "New-IslandWebApp function completed." -Component "New-IslandWebApp" -LogName "IslandAPI-NewWebApp"
 }
 
 #update synopsis
 function Test-IslandWebApp{
     <#
     .SYNOPSIS
-        
+        Creates a new WebApp application in the Island API.
 
     .DESCRIPTION
-        
+        The New-IslandWebApp function connects to the Island API using a provided API key,
+        sends a POST request to create a new WebApp application, and logs the process.
 
     .PARAMETER
         $Tenant (mandatory)
@@ -456,10 +427,10 @@ function Test-IslandWebApp{
                 $updateapp = Read-host "Web app " $AppName " already exists on " $Tenant ". Update? (y/n)"
                 If (($updateapp -eq 'y') -or ($updateapp -eq 'yes'))
                 {
-                    Write-Host "Trying Modify-IslandWebApp instead."
-                    Modify-IslandWebApp -Tenant $Tenant -AppID $app.id -AppName $AppName -AppDestinationUrls $AppDestinationUrls `
+                    Write-Host "Trying Update-IslandWebApp instead."
+                    Update-IslandWebApp -Tenant $Tenant -AppID $app.id -AppName $AppName -AppDestinationUrls $AppDestinationUrls `
                         -AppOverwriteDestinationURLs $false
-                    Write-host "Back after Modify-IslandWebApp"
+                    Write-host "Back after Update-IslandWebApp"
                 }
                 Else {Write-host "Not updating existing app per response"}
             }
@@ -474,15 +445,15 @@ function Test-IslandWebApp{
     {Write-Log -Message "No existing app found." -Component "New-IslandWebApp" -Type "Error" -LogName "IslandAPI-NewWebApp"}
 }
 
-
 function Get-IslandAppByID {
 <#
 .Synopsis
     Returns app when called by ID
 .Description
-    
+    Better option is Get all Custom Web Applications
+    https://documentation.island.io/apidocs/get-all-applicationlibrary-entities
 .Parameter
-    Tenant: accepts "Prod" or "Sandbox;" default is Sandbox
+    Tenant: accepts "Prod" or "Sandbox"
     AppID (mandatory)
 .EXAMPLE
     $settings = Get-IslandAppByID -tenant Sandbox -AppID <appID>
@@ -498,16 +469,15 @@ function Get-IslandAppByID {
     #APItoken
     Write-Log -Message "Starting Get-IslandAppByID." -Component "Get-IslandAppByID" -LogName "IslandAPI-Get-IslandAppByID"
     #$islandAPIKey = get-IslandAPItoken ($Tenant)
-    Write-Log -Message "API Key retrieved." -Component "Get-IslandAppByID" -LogName "IslandAPI-Get-IslandAppByID"
+    #Write-Log -Message "API Key retrieved." -Component "Get-IslandAppByID" -LogName "IslandAPI-Get-IslandAppByID"
+    #the actual apitoken retrieval should be in get-islandsettings
     
     #headers
     $Settings = get-IslandSettings ($Tenant)
     $islandAPILocation = '/api/external/v1/applications/' + $AppID
     $islandAPIUri      = $settings.APIHost + $islandAPILocation
     #message body
-    #Write-Log -Message "Destination URLs parsed: $($destinationUrls -join ', ')" -Component "Modify-IslandWebApp" -LogName "IslandAPI-ModifyIslandWebApp"
-    #Write-Log -Message "Login URLs parsed: $($loginUrls -join ', ')" -Component "Modify-IslandWebApp" -LogName "IslandAPI-ModifyIslandWebApp"
-    
+        
     #POST
     try {
         Write-Log -Message "Sending POST request to $islandAPIUri."  -Component "Get-IslandAppByID" -LogName "IslandAPI-Get-IslandAppByID"
@@ -519,13 +489,10 @@ function Get-IslandAppByID {
         Write-Log -Message "GET request failed: $($_.Exception.Message)" -Component "Get-IslandAppByID" -LogName "IslandAPI-Get-IslandAppByID"
         $_.Exception.Message
     }
-    #return $islandAPIResponse
-    $islandAPIKey = $null
-    Write-Log -Message "API Key cleared from memory." -Component "Get-IslandAppByID" -LogName "IslandAPI-Get-IslandAppByID"
-    Write-Log -Message "Modify-IslandWebApp function completed." -Component "Get-IslandAppByID" -LogName "IslandAPI-Get-IslandAppByID"
+    return $islandAPIResponse
+    Write-Log -Message "Get-IslandWebApp function completed." -Component "Get-IslandAppByID" -LogName "IslandAPI-Get-IslandAppByID"
 }
 
-#TODO: make message body modular based on if elements are defined
 Function Update-IslandWebApp {
 <#
 .Synopsis
@@ -624,15 +591,14 @@ function Get-IslandPendingChanges {
         The Get-IslandPendingChanges function connects to the Island API using a provided API key,
         sends a GET request to retrieve pending policy changes, and logs the process.
         If pending changes are found, it warns the user and provides a link to the Admin Events page.
-        The function also ensures the API key is cleared from memory after use.
 
-    .PARAMETER None
-        This function does not accept any parameters. The API key is prompted interactively.
+    .PARAMETER
+        Tenant (mandatory, validated)
 
     .EXAMPLE
-        Get-IslandPendingChanges
+        Get-IslandPendingChanges -tenant Sandbox
 
-        Prompts for the Island API key, checks for pending changes, and logs the results.
+        Checks for pending changes and logs the results.
 
     .NOTES
         Requires: Write-Log function to be defined in the session.
@@ -640,27 +606,34 @@ function Get-IslandPendingChanges {
     .LINK
         https://documentation.island.io/apidocs/introduction-to-the-api-explorer
     #>
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet("Prod", "Sandbox")] $Tenant
+    )
     Write-Log -Message "Starting Get-IslandPendingChanges function." -Component "Get-IslandPendingChanges" -LogName "IslandAPI-PendingChanges"
 
-    $islandAPIKey = Read-Host -Prompt "Enter your Island API Key"
-    Write-Log -Message "API Key entered." -Component "Get-IslandPendingChanges" -LogName "IslandAPI-PendingChanges"
-
-    $islandAPIHost     = 'https://management.island.io'
+    #APItoken
+    $Settings = get-IslandSettings ($Tenant)
+    
     $islandAPILocation = '/api/external/v1/policyChanges/pendingChanges'
-    $islandAPIUri      = $islandAPIHost + $islandAPILocation
+    $islandAPIUri      = $Settings.APIHost + $islandAPILocation
     $islandAPIheaders  = @{
         'accept'       = 'application/json'
-        'api-key'      = $islandAPIKey
+        'api-key'      = $Settings.APIToken
     }
 
     try {
         Write-Log -Message "Sending GET request to $islandAPIUri." -Component "Get-IslandPendingChanges" -LogName "IslandAPI-PendingChanges"
+        $Settings.APIHeaders
         $islandAPIResponse = Invoke-RestMethod -Method GET -Uri $islandAPIUri -Headers $islandAPIheaders
         Write-Log -Message "GET request successful." -Component "Get-IslandPendingChanges" -LogName "IslandAPI-PendingChanges"
     }
     catch {
         Write-Log -Message "GET request failed: $($_.Exception.Message)" -Component "Get-IslandPendingChanges" -Type "Error" -LogName "IslandAPI-PendingChanges"
         $_.Exception.Message
+        If($_.Exception.Message -like '*(403) Forbidden*')
+        {
+            Write-Warning "The API token used does not have sufficient permission to read pending changes. Try another token."
+        }
     }
 
     if ($islandAPIResponse.actionStatus -eq "Pending") {
@@ -671,13 +644,10 @@ function Get-IslandPendingChanges {
         Write-Log -Message "No pending changes found." -Component "Get-IslandPendingChanges" -LogName "IslandAPI-PendingChanges"
         return "No pending changes found."
     }
-
-    $islandAPIKey = $null
-    Write-Log -Message "API Key cleared from memory." -Component "Get-IslandPendingChanges" -LogName "IslandAPI-PendingChanges"
     Write-Log -Message "Get-IslandPendingChanges function completed." -Component "Get-IslandPendingChanges" -LogName "IslandAPI-PendingChanges"
 }
 
-#
+#Verified 6/29/26
 function Get-IslandUsers {
     <#
     .SYNOPSIS
@@ -715,12 +685,14 @@ function Get-IslandUsers {
         https://documentation.island.io/apidocs/introduction-to-the-api-explorer
     #>
     param (
+        [Parameter(Mandatory = $true)][ValidateSet("Prod", "Sandbox")] $Tenant,
         [string[]]$Properties = @('lastName','firstName','email','userSource','id'),
         [string]$FilterProperty,
         [string]$FilterValue
     )
 
-    $islandAPIKey = Read-Host -Prompt "Enter your Island API Key"
+    #limiting the api settings to the token because get-apisettings isn't set up for this
+    $islandAPIKey = get-IslandAPItoken -Tenant $Tenant
     $islandAPIHost = 'https://management.island.io'
     $islandAPILocation = '/api/external/v1/users'
     $islandAPIQueryParams = '?Limit=1000&SortBy=UserType&IncludeAllUserStatus=true'
@@ -767,10 +739,9 @@ function Get-IslandUsers {
         Write-Log -Message "No user data received from API call" -Component "Get Users" -Type Warning -LogName "IslandAPI-GetUsers"
     }
 
-    $islandAPIKey = $null
 }
 
-#
+#Verified 6/29/26
 function Get-IslandApps {
     <#
     .SYNOPSIS
@@ -800,18 +771,11 @@ function Get-IslandApps {
     #>
     [CmdletBinding()]
     Param(
+        [Parameter(Mandatory = $true)][ValidateSet("Prod", "Sandbox")] $Tenant,
         [Parameter(Mandatory = $false)]
         [ValidateSet("WebApp", "SshApp", "RdpApp", "SmbApp", "DesktopApp")]
-        [String]$Type,
-        [ValidateSet("Prod", "Sandbox")]
-        [string]$Tenant = "Sandbox"
+        [String]$Type
         )
-
-    #APItoken
-    #fix this so it takes settings.api
-    Write-Log -Message "Starting Get-IslandApps." -Component "Get-IslandApps" -LogName "IslandAPI-GetIslandApps"
-    $islandAPIKey = get-IslandAPItoken ($Tenant)
-    Write-Log -Message "API Key retrieved." -Component "Get-IslandApps" -LogName "IslandAPI-GetIslandApps"
 
     #settings and headers
     $settings = get-IslandSettings -Tenant $Tenant
@@ -820,7 +784,7 @@ function Get-IslandApps {
     $islandAPIUri = $settings.APIHost + $islandAPILocation + $islandAPIQueryParams
     $islandAPIheaders = @{
       'accept'  = 'application/json'
-      'api-key' = $islandAPIKey
+      'api-key' = $settings.APIToken
     }
 
     #GET
@@ -858,6 +822,7 @@ function Get-IslandApps {
     }
 }
 
+#Verified 6/29/26
 function save-IslandAPItoken {
 <#
 .SYNOPSIS
@@ -924,54 +889,58 @@ function save-IslandAPItoken {
 #LOG
 #ERROR CHECKING
 #Not committing after; do that manually *Add later as option
+<# Cut down to only go from Prod to SB
+from SB to Prod should be Migrate app by ID#>
 function Sync-IslandWebApps{
+    <#
+    .SYNOPSIS
+        Copies/syncs from Prod to Sandbox
+        
+
+    .DESCRIPTION
+        For promotion from SB to Prod, use Migrate-IslandWebAppByID
+        TODO: backup and wipe SB before loading from prod (separate functions, called from here)
+
+    .PARAMETER Type
+        Tenant (validated)
+        API (mandatory)
+        $Update (validated)
+
+    .EXAMPLE
+        save-IslandAPItoken -Tenant Sandbox -API <token> -Update False
+
+    .LINK
+        https://evelin.tech/store-api-keys-securely-with-powershell/
+    #>
     [CmdletBinding(SupportsShouldProcess)]
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet("Prod", "Sandbox")]
-        [string]$Source = "Prod",
+        [ValidateSet("Prod", "Sandbox")]$Source,
         [Parameter(Mandatory = $true)]
-        [ValidateSet("Prod", "Sandbox")]
-        [string]$Destination = "Sandbox",
-        [ValidateSet($true, $false)]$OverwriteExistingApp = $false,
-        [ValidateSet('mirror', 'todestination')]$SyncDirection = 'todestination',
-        [ValidateSet($true, $false)]$Confirm = $false,
-        [ValidateSet($true, $false)]$ConfirmEach = $false
+        [ValidateSet("Prod", "Sandbox")]$Destination,
+        [ValidateSet($true, $false)]$OverwriteExistingApp = $false#,
+        #[ValidateSet($true, $false)]$Confirm = $false,
+        #[ValidateSet($true, $false)]$ConfirmEach = $false
+        #TODO See if -Confirm flag is built in 
     )
     $SourceApps = Get-IslandApps -Tenant $Source 
     $DestinationApps = Get-IslandApps -Tenant $Destination
     foreach($app in $SourceApps){
-        switch($SyncDirection){
-            'mirror'{
-                if ($app.name -notin $DestinationApps.name){$DestinationTemp.apps.add($app) }
-                else {$app}
-            }
-            'todestination'{if ($app.name -notin $DestinationApps.name){$DestinationTemp.apps.add($app)} }
+        If($OverwriteExistingApp)
+        {
+            New-IslandWebApp -Tenant $Source -AppName $app.name -AppDescription $app.Description -AppType $app.type `
+                -AppCategory $app.category -AppLogoSVG $app.svg -AppDestinationUrls $app.destinationUrls `
+                -ApploginUrls $app.loginUrls 
         }
+        Elseif ($app.name -notin $DestinationApps.name){$DestinationTemp.apps.add($app) }
     }
-    foreach($app in $DestinationApps){
-        switch($SyncDirection){
-            'mirror'{if ($app -notin $SourceApps){$SourceTemp.apps.add($app) }}
-            'todestination'{ }
-        }
 
-    }
     If ($DestinationTemp){
         foreach ($app in $DestinationTemp){
             If($PSCmdlet.ShouldProcess("Console", "Creating '$app.name' on '$tenant' with settings -AppDescription '$app.Description' `
                 -AppType '$app.type' -AppCategory '$app.category' -AppLogoSVG '$app.svg' -AppDestinationUrls '$app.destinationUrls' `
                 -ApploginUrls '$app.loginUrls'")){
                     New-IslandWebApp -Tenant $Destination -AppName $app.name -AppDescription $app.Description -AppType $app.type `
-                        -AppCategory $app.category -AppLogoSVG $app.svg -AppDestinationUrls $app.destinationUrls -ApploginUrls $app.loginUrls 
-            }
-        }
-    }
-    If ($SourceTemp){
-        foreach ($app in $SourceTemp){
-            If($PSCmdlet.ShouldProcess("Console", "Creating '$app.name' on '$tenant' with settings -AppDescription '$app.Description' `
-                -AppType '$app.type' -AppCategory '$app.category' -AppLogoSVG '$app.svg' -AppDestinationUrls '$app.destinationUrls' `
-                -ApploginUrls '$app.loginUrls'")){
-                    New-IslandWebApp -Tenant $Source -AppName $app.name -AppDescription $app.Description -AppType $app.type `
                         -AppCategory $app.category -AppLogoSVG $app.svg -AppDestinationUrls $app.destinationUrls -ApploginUrls $app.loginUrls 
             }
         }
@@ -991,13 +960,27 @@ https://documentation.island.io/apidocs/get-all-admin-actions-that-match-the-spe
 test: does this SB match prod? prompt for update
 save/set preferences (Save/use API key, sb/prod default, ???)
 #>
+<#TODO
+Backup (keys, tenant, apps)
+Wipe (limited to SB)
+Sync should have option to wipe and reload
+get pending changes gets user, apply pending changes gest user, if match, fails *require peer review
+can api keys be revoked via api?
 
+#>
 #WIP
 #Needs synopsis
 #TODO parameter set to migrate by name or ID
 #TODO Did you use AppOverwriteDestinationURLs?
 #Did you check if source and destination are different?
-function Migrate-IslandWebAppByID{ #This is for copying from SB to prod; fix
+<#update get-apisettings to allow for different requirements
+*What are those requirements and how are they set
+add to app group (finish adding web app)
+git sync
+
+
+#>
+function Move-IslandWebAppByID{ #This is for copying from SB to prod; fix
 <#
     .SYNOPSIS
         Copies an app from Sandbox to Prod
